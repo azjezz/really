@@ -1,27 +1,50 @@
 <?php
 
-use Psl\{Async, Network, Json};
+/**
+ * @noinspection ForgottenDebugOutputInspection
+ * @noinspection PhpUnhandledExceptionInspection
+ */
+
+use Psl\Async;
+use Psl\Str;
+use Really\Payload;
 
 require __DIR__ . '/../vendor/autoload.php';
 
-$pool = new Really\Pool(__DIR__ . '/worker-http.php', 5, 2);
-$time = time();
-$awaitables = [];
-for ($i = 0; $i < 10; $i++) {
-    $awaitables[] = $pool->dispatch(static function (Network\SocketInterface $connection) use($i): void {
-        $connection->writeAll('olleh');
-        $response = $connection->readAll();
+Async\main(static function (): int {
 
-        ['worker' => $worker, 'response' => $response] = Json\decode($response);
 
-        echo "[worker=$worker][job=$i]: $response\n";
+    $time = time();
 
-        $connection->close();
-    });
-}
+    $pool = new Really\Pool(__DIR__ . '/worker-http.php');
 
-Async\all($awaitables);
+    $awaitables = [];
+    // 20 requests per payload.
+    // send 50 payloads.
+    for ($i = 0; $i < 50; $i++) {
+        $awaitables[] = $pool->dispatch(Payload\GenericPayload::create([
+            'host' => 'example.com',
+            'path' => '/',
+            'requests' => 20,
+        ]));
+    }
 
-$pool->stop();
+    foreach (Async\all($awaitables) as $wrapper) {
+        /**
+         * @var array{worker: int, responses: list<string>} $result
+         */
+        $result = $wrapper->getResult();
 
-var_dump(time() - $time); // executed 800 jobs.
+        foreach ($result['responses'] as $response) {
+            $header_line = Str\split($response, "\n")[0] ?? '';
+
+            echo "[worker={$result['worker']}] {$header_line}\n";
+        }
+    }
+
+    $pool->stop();
+
+    var_dump(time() - $time); // sent 1000 http requests.
+
+    return 0;
+});

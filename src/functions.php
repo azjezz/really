@@ -2,7 +2,9 @@
 
 namespace Really;
 
+use Psl\Async;
+
 function worker(\Closure $closure): void
 {
-    Worker::create()->run($closure);
+    Async\main(static fn() => Worker::create()->run($closure));
 }

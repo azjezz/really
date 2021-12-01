@@ -4,20 +4,21 @@ declare(strict_types=1);
 
 require __DIR__.'/../vendor/autoload.php';
 
-use Psl\Json;
 use Psl\Shell;
 use Psl\Str;
+use Really\Payload;
 
-Really\worker(function(Really\Worker $worker, Psl\Network\SocketInterface $connection): void {
-    $request = $connection->read();
+Really\worker(function(Payload\GenericPayload $payload, Really\Worker $worker): array {
+    /** @var string $message */
+    $message = $payload->data['message'];
+    /** @var string $duration */
+    $duration = $payload->data['duration'];
 
-    // execute a shell command that takes 1 second!
-    Shell\execute('sleep', ['1']);
+    // execute a shell command that takes $duration second(s)
+    Shell\execute('sleep', [$duration]);
 
-    $connection->writeAll(Json\encode([
+    return [
         'worker' => $worker->getId(),
-        'response' => Str\reverse($request),
-    ]));
-
-    $connection->close();
+        'response' => Str\reverse($message),
+    ];
 });

@@ -4,25 +4,27 @@ declare(strict_types=1);
 
 namespace Really;
 
-use Closure;
 use Psl;
 use Psl\Async;
 use Psl\Env;
+use Psl\Json;
 use Psl\Network;
 use Psl\Str;
 use Psl\TCP;
-use Psl\Vec;
 use Psl\Unix;
+use Psl\Vec;
+use Throwable;
 use function count;
 use function parse_url;
+use function serialize;
+use function strlen;
+use function unpack;
+use function unserialize;
 
 final class Worker
 {
     public const MESSAGE_PING = 'ping';
-    public const MESSAGE_PING_LENGTH = 4;
-
-    public const MESSAGE_PONG = 'pong';
-    public const MESSAGE_PONG_LENGTH = 4;
+    public const MESSAGE_LENGTH = 4;
 
     public function __construct(
         private int             $id,
@@ -58,38 +60,90 @@ final class Worker
         return new self($worker_id, $concurrency_level, $address);
     }
 
-    public function getId(): int
+    /**
+     * @template TPayloadType
+     * @template TResult
+     * @template TPayloadInstance of Payload\PayloadInterface<TPayloadType, TResult>
+     *
+     * @psalm-param (callable(TPayloadInstance, Worker): TResult) $handler
+     *
+     * @throws Throwable
+     */
+    public function run(callable $handler): never
     {
-        return $this->id;
-    }
+        $connect = function (): ?Network\SocketInterface {
+            $server_address = $this->getServerAddress();
 
-    public function run(Closure $closure): void
-    {
-        $server_address = $this->getServerAddress();
-        $pending = [];
-        while (true) {
-            if ($server_address->scheme === Network\SocketScheme::TCP) {
-                $connection = TCP\connect($server_address->host, $server_address->port);
-            } else {
-                $connection = Unix\connect($server_address->host);
+            try {
+                if ($server_address->scheme === Network\SocketScheme::TCP) {
+                    return TCP\connect($server_address->host, $server_address->port);
+                }
+
+                return Unix\connect($server_address->host);
+            } catch (Network\Exception\ExceptionInterface) {
+                return null;
             }
+        };
 
-            $connection->readAll(self::MESSAGE_PING_LENGTH);
-            $connection->writeAll(self::MESSAGE_PONG);
+        $pending = [];
 
-            $pending[] = Async\run(fn() => $closure($this, $connection));
-            while(count($pending) >= $this->concurrency_level) {
-                [$completed, $pending] = Vec\partition($pending, fn(Async\Awaitable $awaitable): bool => $awaitable->isComplete());
+        while ($connection = $connect()) {
+            Psl\invariant('ping' === $connection->read(self::MESSAGE_LENGTH), 'did not receive ping.');
+
+            $pending[] = Async\run(function () use ($connection, $handler): void {
+                try {
+                    $packed_serialized_payload_length = $connection->read(self::MESSAGE_LENGTH);
+                    Psl\invariant(4 === strlen($packed_serialized_payload_length), 'incorrect length.');
+                    $serialized_payload_length = unpack('L', $packed_serialized_payload_length)[1];
+                    $serialized_payload = $connection->readAll($serialized_payload_length);
+                    $payload = unserialize($serialized_payload);
+                } catch (Throwable) {
+                    // should be handled better.
+                    $connection->close();
+
+                    return;
+                }
+
+                try {
+                    $result = [
+                        'result' => serialize($handler($payload, $this)),
+                        'exception' => null,
+                    ];
+                } catch (Throwable $throwable) {
+                    echo $throwable->getMessage();
+                    $result = [
+                        'exception' => serialize($throwable),
+                        'result' => null,
+                    ];
+                }
+
+                $result_encoded = Json\encode($result);
+
+                $connection->writeAll($result_encoded);
+                $connection->close();
+            })->ignore();
+
+            while (count($pending) >= $this->concurrency_level) {
+                [$completed, $pending] = Vec\partition(
+                    $pending,
+                    static fn(Async\Awaitable $awaitable): bool => $awaitable->isComplete()
+                );
 
                 Async\all($completed);
-                Async\later();
             }
         }
+
+        exit(0);
     }
 
     public function getServerAddress(): Network\Address
     {
         return $this->server_address;
+    }
+
+    public function getId(): int
+    {
+        return $this->id;
     }
 
     public function getConcurrencyLevel(): int

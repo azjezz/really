@@ -1,27 +1,36 @@
 <?php
 
-use Psl\{Async, Network, Json};
+/**
+ * @noinspection ForgottenDebugOutputInspection
+ * @noinspection PhpUnhandledExceptionInspection
+ */
+
+use Psl\Async;
+use Really\Payload;
 
 require __DIR__ . '/../vendor/autoload.php';
 
-$pool = new Really\Pool(__DIR__ . '/worker.php');
 $time = time();
+
+$pool = new Really\Pool(__DIR__ . '/worker.php');
+
 $awaitables = [];
-for ($i = 0; $i < 800; $i++) {
-    $awaitables[] = $pool->dispatch(static function (Network\SocketInterface $connection) use($i): void {
-        $connection->writeAll('olleh');
-        $response = $connection->readAll();
-
-        ['worker' => $worker, 'response' => $response] = Json\decode($response);
-
-        echo "[worker=$worker][job=$i]: $response\n";
-
-        $connection->close();
-    });
+for ($i = 0; $i < 1000; $i++) {
+    $awaitables[] = $pool->dispatch(Payload\GenericPayload::create([
+        'message' => 'olleh',
+        'duration' => '2'
+    ]));
 }
 
-Async\all($awaitables);
+foreach (Async\all($awaitables) as $wrapper) {
+    /**
+     * @var array{worker: int, response: string} $result
+     */
+    $result = $wrapper->getResult();
+
+    echo "[worker={$result['worker']}]: {$result['response']}\n";
+}
 
 $pool->stop();
 
-var_dump(time() - $time); // executed 800 jobs.
+var_dump(time() - $time); // executed 1000 jobs.

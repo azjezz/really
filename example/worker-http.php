@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 require __DIR__.'/../vendor/autoload.php';
 
-use Psl\Json;
-use Psl\Shell;
-use Psl\Str;
 use Psl\TCP;
+use Really\Payload;
 use Psl\Async;
 
 function fetch(string $host, string $path): string
@@ -20,20 +18,18 @@ function fetch(string $host, string $path): string
     return $response;
 }
 
-Really\worker(function(Really\Worker $worker, Psl\Network\SocketInterface $connection): void {
-    $request = $connection->read();
+Really\worker(function(Payload\GenericPayload $payload, Really\Worker $worker): array {
+    $host = $payload->data['host'];
+    $path = $payload->data['path'];
+    $requests = $payload->data['requests'];
 
     $responses = [];
-    for($i = 0; $i <= 100; $i++) {
-      $responses[] = Async\run(fn() => fetch('example.com', '/'));
+    for($i = 0; $i <= $requests; $i++) {
+      $responses[$i] = Async\run(fn() => fetch($host, $path));
     }
 
-    Async\all($responses);
-
-    $connection->writeAll(Json\encode([
+    return [
         'worker' => $worker->getId(),
-        'response' => Str\reverse($request),
-    ]));
-
-    $connection->close();
+        'responses' => Async\all($responses),
+    ];
 });

@@ -4,25 +4,22 @@ declare(strict_types=1);
 
 namespace Really;
 
-use Closure;
 use Psl;
 use Psl\Dict;
 use Psl\Env;
 use Psl\IO\Stream;
 use Psl\Network;
-use Psl\Async;
 use Psl\Str;
-
+use function proc_close;
 use function proc_open;
 use function proc_terminate;
-
 use const PHP_BINARY;
 use const PHP_OS_FAMILY;
 
 final class WorkerProcess
 {
     public function __construct(
-        private int $id,
+        private int                             $id,
         /**
          * @var resource|null $process
          */
@@ -94,9 +91,13 @@ final class WorkerProcess
         $this->stdout->close();
         $this->stderr->close();
 
+        unset($this->stdout, $this->stderr);
+
         $process = $this->process;
         $this->process = null;
+
         proc_terminate($process);
+        proc_close($process);
     }
 }
 
