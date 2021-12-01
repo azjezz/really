@@ -41,6 +41,8 @@ final class WorkerProcess
                 'bypass_shell' => true,
                 'blocking_pipes' => false,
             ];
+        } else {
+            $commandline = 'exec ' . $commandline;
         }
 
         $descriptor = [
