@@ -10,27 +10,37 @@ use Really\Payload;
 
 require __DIR__ . '/../vendor/autoload.php';
 
-$time = time();
+Async\main(static function(): int {
+    $pool = new Really\Pool(__DIR__ . '/worker.php', 8, 120);
 
-$pool = new Really\Pool(__DIR__ . '/worker.php');
+    $time = time();
 
-$awaitables = [];
-for ($i = 0; $i < 1000; $i++) {
-    $awaitables[] = $pool->dispatch(Payload\GenericPayload::create([
-        'message' => 'olleh',
-        'duration' => '2'
-    ]));
-}
+    $awaitables = [];
+    for ($i = 0; $i < 800; $i++) {
+        $awaitables[] = $pool->dispatch(Payload\GenericPayload::create([
+            'message' => 'olleh',
+            'duration' => '2'
+        ]));
+    }
 
-foreach (Async\all($awaitables) as $wrapper) {
-    /**
-     * @var array{worker: int, response: string} $result
-     */
-    $result = $wrapper->getResult();
+    foreach (Async\Awaitable::iterate($awaitables) as $i => $awaitable) {
+        /**
+         * @var array{worker: int, response: string} $result
+         */
+        $result = $awaitable->await();
+        if ($result->isFailed()) {
+            // todo figure out which worker is failing.
+            echo "[worker=n/a][job={$i}] failed: {$result->getException()->getMessage()}\n";
+        } else {
+            $result = $result->getResult();
 
-    echo "[worker={$result['worker']}]: {$result['response']}\n";
-}
+            echo "[worker={$result['worker']}][job={$i}]: {$result['response']}\n";
+        }
+    }
 
-$pool->stop();
+    echo 'Done: ' . (time() - $time) . 's' . PHP_EOL;
 
-var_dump(time() - $time); // executed 1000 jobs.
+    $pool->stop();
+
+    return 0;
+});

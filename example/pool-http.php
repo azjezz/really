@@ -11,40 +11,37 @@ use Really\Payload;
 
 require __DIR__ . '/../vendor/autoload.php';
 
-Async\main(static function (): int {
+$time = time();
 
+$pool = new Really\Pool(__DIR__ . '/worker-http.php', workers_count: 16, concurrency_level: 50);
+$awaitables = [];
+for ($i = 0; $i < 2; $i++) {
+    $awaitables[] = $pool->dispatch(Payload\GenericPayload::create([
+        'host' => 'example.com',
+        'path' => '/',
+        'requests' => 1,
+    ]));
+}
 
-    $time = time();
+foreach (Async\Awaitable::iterate($awaitables) as $awaitable) {
+    /**
+     * @var array{worker: int, responses: list<string>} $result
+     */
 
-    $pool = new Really\Pool(__DIR__ . '/worker-http.php');
-
-    $awaitables = [];
-    // 20 requests per payload.
-    // send 50 payloads.
-    for ($i = 0; $i < 50; $i++) {
-        $awaitables[] = $pool->dispatch(Payload\GenericPayload::create([
-            'host' => 'example.com',
-            'path' => '/',
-            'requests' => 20,
-        ]));
-    }
-
-    foreach (Async\all($awaitables) as $wrapper) {
-        /**
-         * @var array{worker: int, responses: list<string>} $result
-         */
-        $result = $wrapper->getResult();
-
+    $result = $awaitable->await();
+    if ($result->isFailed()) {
+        echo "[job={$i}] failed: {$result->getException()->getMessage()}\n";
+    } else {
+        $result = $awaitable->await()->getResult();
         foreach ($result['responses'] as $response) {
             $header_line = Str\split($response, "\n")[0] ?? '';
-
             echo "[worker={$result['worker']}] {$header_line}\n";
         }
     }
+}
 
-    $pool->stop();
+echo 'Done: ' . (time() - $time) . 's' . PHP_EOL;
 
-    var_dump(time() - $time); // sent 1000 http requests.
+$pool->stop();
 
-    return 0;
-});
+return 0;

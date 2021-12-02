@@ -14,12 +14,15 @@ use Psl\TCP;
 use Psl\Unix;
 use Psl\Vec;
 use Throwable;
+
 use function count;
 use function parse_url;
 use function serialize;
 use function strlen;
 use function unpack;
 use function unserialize;
+
+use const SIGTERM;
 
 final class Worker
 {
@@ -56,7 +59,7 @@ final class Worker
             $address_components = parse_url($server_address);
             $address = Network\Address::tcp($address_components['host'], $address_components['port']);
         }
-
+        
         return new self($worker_id, $concurrency_level, $address);
     }
 
@@ -86,6 +89,12 @@ final class Worker
         };
 
         $pending = [];
+
+        Async\Scheduler::unreference(Async\Scheduler::onSignal(SIGTERM, function () use(&$pending): void {
+            unset($pending);
+
+            exit(0);
+        }));
 
         while ($connection = $connect()) {
             Psl\invariant('ping' === $connection->read(self::MESSAGE_LENGTH), 'did not receive ping.');

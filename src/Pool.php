@@ -32,17 +32,11 @@ final class Pool
      */
     private array $workers = [];
 
-    /**
-     * @var list<Async\Awaitable<Result\ResultInterface<mixed>>>
-     */
-    private array $jobs = [];
+    private Async\Awaitable $lastConnection;
 
-    private Async\Awaitable $last;
 
     public function __construct(private string $script, int $workers_count = 8, int $concurrency_level = 100)
     {
-        posix_setsid();
-
         Psl\invariant(Filesystem\is_readable($this->script), '$script "%s" is not readable.', $this->script);
         Psl\invariant($workers_count >= 1, '$workers_count (%d) must be a positive integer.', $workers_count);
         Psl\invariant($concurrency_level >= 1, '$concurrency_level (%d) must be a positive integer.', $concurrency_level);
@@ -53,14 +47,14 @@ final class Pool
             $this->workers[$i] = WorkerProcess::spawn($this->server, $this->script, $i, $concurrency_level);
         }
 
-        $watchers[] = Async\Scheduler::onSignal(SIGTERM, fn() => $this->stop());
-        $watchers[] = Async\Scheduler::onSignal(SIGINT, fn() => $this->stop());
+        $watchers[] = Async\Scheduler::onSignal(SIGTERM, $this->stop(...));
+        $watchers[] = Async\Scheduler::onSignal(SIGINT, $this->stop(...));
 
         foreach ($watchers as $watcher) {
             Async\Scheduler::unreference($watcher);
         }
 
-        $this->last = Async\Awaitable::complete(null);
+        $this->lastConnection = Async\Awaitable::complete(null);
     }
 
     /**
@@ -70,13 +64,12 @@ final class Pool
     {
         $this->closing = true;
 
-        // wait for all the jobs before killing the workers, and stopping the server.
-        Async\all(Vec\map($this->jobs, static fn($awaitable) => $awaitable->ignore()));
+        $this->lastConnection->ignore();
 
-        // stop network server
+        // stop server
         $this->server->stopListening();
 
-        // kill the workers.
+        // kill all the workers.
         foreach ($this->workers as $worker) {
             $worker->kill();
         }
@@ -92,57 +85,60 @@ final class Pool
      */
     public function dispatch(Payload\PayloadInterface $payload): Async\Awaitable
     {
-        $this->last->await();
         if ($this->closing) {
             return Async\Awaitable::complete(new Result\Failure(new \Exception('Closed!')));
         }
 
-        $this->jobs = Vec\filter(
-            $this->jobs,
-            static fn(Async\Awaitable $awaitable): bool => !$awaitable->isComplete()
-        );
+        $this->lastConnection->await();
 
-        try {
-            $this->last->then(fn() => null, fn() => null)->await();
+        $this->lastConnection = Async\run(Async\reflect($this->server->nextConnection(...)));
 
-            $this->last = Async\run(fn() => $this->server->nextConnection());
+        return $this
+            ->lastConnection
+            ->then(
+                static function (Result\ResultInterface $result) use($payload): Result\ResultInterface {
+                    if ($result->isFailed()) {
+                        return $result;
+                    }
 
-            $connection = $this->last->await();
-        } catch (Network\Exception\AlreadyStoppedException $e) {
-            return Async\Awaitable::complete(new Result\Failure($e));
-        }
+                    $connection = $result->getResult();
+                    $connection->writeAll(Worker::MESSAGE_PING);
 
-        $connection->writeAll(Worker::MESSAGE_PING);
+                    $payload_serialized = serialize($payload);
 
-        /** @var Async\Awaitable<Result\ResultInterface<TResult>> */
-        return Async\run(static function () use ($payload, $connection): Result\ResultInterface {
-            try {
-                $serialized_payload = serialize($payload);
-                $serialized_payload_length = pack('L', strlen($serialized_payload));
+                    $payload_serialized_length = pack('L', strlen($payload_serialized));
 
-                $connection->writeAll($serialized_payload_length);
-                $connection->writeAll($serialized_payload);
+                    $connection->writeAll($payload_serialized_length.$payload_serialized);
 
-                $response = $connection->readAll();
-                $response = Json\typed($response, Type\shape([
-                    'result' => Type\nullable(Type\string()),
-                    'exception' => Type\nullable(Type\string()),
-                ]));
+                    $response = $connection->readAll();
+                    if ($response === '') {
+                        $connection->close();
 
-                if ($response['exception'] !== null) {
-                    /** @var \Throwable */
-                    $exception = unserialize($response['exception']);
+                        return new Result\Failure(new \Exception('Connection with the worker has been interrupted ( could be the cause of calling $pool->stop() prematurely, which is invoked when SIGTERM, or SIGINT is received ).'));
+                    }
+                    try {
+                        $response = Json\typed($response, Type\shape([
+                            'result' => Type\nullable(Type\string()),
+                            'exception' => Type\nullable(Type\string()),
+                        ]));
+                    } catch(Json\Exception\DecodeException $e) {
+                        return new Result\Failure($e);
+                    } finally {
+                        $connection->close();
+                    }
 
-                    return new Result\Failure($exception);
-                }
+                    if ($response['exception'] !== null) {
+                        /** @var \Throwable */
+                        $exception = unserialize($response['exception']);
 
-                $result = unserialize(Type\string()->assert($response['result']));
+                        return new Result\Failure($exception);
+                    }
 
-                return new Result\Success($result);
-            } finally {
-                $connection->close();
-            }
-        });
+                    return new Result\Success(unserialize(Type\string()->assert($response['result'])));
+                },
+                static fn (Throwable $throwable): Result\ResultInterface => new Result\Failure($throwable)
+            )
+        ;
     }
 
     /**

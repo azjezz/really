@@ -10,9 +10,12 @@ use Psl\Env;
 use Psl\IO\Stream;
 use Psl\Network;
 use Psl\Str;
+
 use function proc_close;
 use function proc_open;
 use function proc_terminate;
+
+use const SIGTERM;
 use const PHP_BINARY;
 use const PHP_OS_FAMILY;
 
@@ -98,7 +101,7 @@ final class WorkerProcess
         $process = $this->process;
         $this->process = null;
 
-        proc_terminate($process);
+        proc_terminate($process, SIGTERM);
         proc_close($process);
     }
 }
