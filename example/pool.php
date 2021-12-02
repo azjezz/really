@@ -30,7 +30,7 @@ Async\main(static function(): int {
         $result = $awaitable->await();
         if ($result->isFailed()) {
             // todo figure out which worker is failing.
-            echo "[worker=n/a][job={$i}] failed: {$result->getException()->getMessage()}\n";
+            echo "[worker=n/a][job={$i}]: {$result->getException()->getMessage()}\n";
         } else {
             $result = $result->getResult();
 
