@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace Really;
 
+use Exception;
 use Psl;
+use Psl\Result;
 use Psl\Async;
 use Psl\Filesystem;
 use Psl\Json;
 use Psl\Network;
-use Psl\Result;
 use Psl\TCP;
 use Psl\Type;
-use Psl\Vec;
 use Throwable;
 use function pack;
 use function serialize;
@@ -23,8 +23,6 @@ use const SIGTERM;
 
 final class Pool
 {
-    private bool $closing = false;
-
     private Network\ServerInterface $server;
 
     /**
@@ -32,8 +30,7 @@ final class Pool
      */
     private array $workers = [];
 
-    private Async\Awaitable $lastConnection;
-
+    private Async\Sequence $connectionSequence;
 
     public function __construct(private string $script, int $workers_count = 8, int $concurrency_level = 100)
     {
@@ -42,6 +39,7 @@ final class Pool
         Psl\invariant($concurrency_level >= 1, '$concurrency_level (%d) must be a positive integer.', $concurrency_level);
 
         $this->server = TCP\Server::create('127.0.0.1');
+        $this->connectionSequence = new Async\Sequence($this->server->nextConnection(...));
 
         for ($i = 0; $i < $workers_count; $i++) {
             $this->workers[$i] = WorkerProcess::spawn($this->server, $this->script, $i, $concurrency_level);
@@ -53,8 +51,6 @@ final class Pool
         foreach ($watchers as $watcher) {
             Async\Scheduler::unreference($watcher);
         }
-
-        $this->lastConnection = Async\Awaitable::complete(null);
     }
 
     /**
@@ -62,12 +58,9 @@ final class Pool
      */
     public function stop(): void
     {
-        $this->closing = true;
-
-        $this->lastConnection->ignore();
-
+        $this->connectionSequence->cancel(new Exception('closed'));
         // stop server
-        $this->server->stopListening();
+        $this->server->close();
 
         // kill all the workers.
         foreach ($this->workers as $worker) {
@@ -85,60 +78,33 @@ final class Pool
      */
     public function dispatch(Payload\PayloadInterface $payload): Async\Awaitable
     {
-        if ($this->closing) {
-            return Async\Awaitable::complete(new Result\Failure(new \Exception('Closed!')));
-        }
+        return Async\run(Async\reflect(function () use ($payload): mixed {
+            $connection = $this->connectionSequence->waitFor(null);
+            $connection->writeAll(Worker::MESSAGE_PING);
 
-        $this->lastConnection->await();
+            $payload_serialized = serialize($payload);
+            $payload_serialized_length = pack('L', strlen($payload_serialized));
 
-        $this->lastConnection = Async\run(Async\reflect($this->server->nextConnection(...)));
+            $connection->writeAll($payload_serialized_length . $payload_serialized);
 
-        return $this
-            ->lastConnection
-            ->then(
-                static function (Result\ResultInterface $result) use($payload): Result\ResultInterface {
-                    if ($result->isFailed()) {
-                        return $result;
-                    }
+            $response = $connection->readAll();
+            $connection->close();
+            if ($response === '') {
+                throw new Exception('Connection with the worker has been interrupted ( could be the cause of calling $pool->stop() prematurely, which is invoked when SIGTERM, or SIGINT is received ).');
+            }
 
-                    $connection = $result->getResult();
-                    $connection->writeAll(Worker::MESSAGE_PING);
+            $response = Json\typed($response, Type\shape([
+                'result' => Type\nullable(Type\string()),
+                'exception' => Type\nullable(Type\string()),
+            ]));
 
-                    $payload_serialized = serialize($payload);
+            if ($response['exception'] !== null) {
+                throw unserialize($response['exception']);
+            }
 
-                    $payload_serialized_length = pack('L', strlen($payload_serialized));
-
-                    $connection->writeAll($payload_serialized_length.$payload_serialized);
-
-                    $response = $connection->readAll();
-                    if ($response === '') {
-                        $connection->close();
-
-                        return new Result\Failure(new \Exception('Connection with the worker has been interrupted ( could be the cause of calling $pool->stop() prematurely, which is invoked when SIGTERM, or SIGINT is received ).'));
-                    }
-                    try {
-                        $response = Json\typed($response, Type\shape([
-                            'result' => Type\nullable(Type\string()),
-                            'exception' => Type\nullable(Type\string()),
-                        ]));
-                    } catch(Json\Exception\DecodeException $e) {
-                        return new Result\Failure($e);
-                    } finally {
-                        $connection->close();
-                    }
-
-                    if ($response['exception'] !== null) {
-                        /** @var \Throwable */
-                        $exception = unserialize($response['exception']);
-
-                        return new Result\Failure($exception);
-                    }
-
-                    return new Result\Success(unserialize(Type\string()->assert($response['result'])));
-                },
-                static fn (Throwable $throwable): Result\ResultInterface => new Result\Failure($throwable)
-            )
-        ;
+            /** @var TResult */
+            return unserialize(Type\string()->assert($response['result']));
+        }));
     }
 
     /**

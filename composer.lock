@@ -12,12 +12,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/azjezz/psl.git",
-                "reference": "1d74c20778c4d64b32806f83dfba10e9151db858"
+                "reference": "da709bfd9b3bc15c3fa9666dbd79a62757a9fa73"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/azjezz/psl/zipball/1d74c20778c4d64b32806f83dfba10e9151db858",
-                "reference": "1d74c20778c4d64b32806f83dfba10e9151db858",
+                "url": "https://api.github.com/repos/azjezz/psl/zipball/da709bfd9b3bc15c3fa9666dbd79a62757a9fa73",
+                "reference": "da709bfd9b3bc15c3fa9666dbd79a62757a9fa73",
                 "shasum": ""
             },
             "require": {
@@ -27,14 +27,15 @@
                 "ext-mbstring": "*",
                 "ext-sodium": "*",
                 "php": "~8.1.0",
-                "revolt/event-loop": "~0.1.0"
+                "revolt/event-loop": "~0.1.1"
             },
             "require-dev": {
-                "friendsofphp/php-cs-fixer": "^3.2.1",
+                "friendsofphp/php-cs-fixer": "^3.4.0",
                 "php-coveralls/php-coveralls": "^2.5",
                 "php-standard-library/psalm-plugin": "^1.1.1",
-                "phpbench/phpbench": "^1.2.0",
+                "phpbench/phpbench": "^1.2.2",
                 "phpunit/phpunit": "^9.5.10",
+                "roave/infection-static-analysis-plugin": "1.13.x-dev",
                 "squizlabs/php_codesniffer": "^3.6.1",
                 "vimeo/psalm": "^4.11.2"
             },
@@ -78,20 +79,20 @@
                     "type": "open_collective"
                 }
             ],
-            "time": "2021-12-02T15:05:28+00:00"
+            "time": "2021-12-30T03:52:24+00:00"
         },
         {
             "name": "revolt/event-loop",
-            "version": "v0.1.0",
+            "version": "v0.1.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/revoltphp/event-loop.git",
-                "reference": "498362a78884eb3bdb0a4389d01111d8d250c397"
+                "reference": "a928073cc74501c1852fd9d8c8b02e550cb56517"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/revoltphp/event-loop/zipball/498362a78884eb3bdb0a4389d01111d8d250c397",
-                "reference": "498362a78884eb3bdb0a4389d01111d8d250c397",
+                "url": "https://api.github.com/repos/revoltphp/event-loop/zipball/a928073cc74501c1852fd9d8c8b02e550cb56517",
+                "reference": "a928073cc74501c1852fd9d8c8b02e550cb56517",
                 "shasum": ""
             },
             "require": {
@@ -148,9 +149,9 @@
             ],
             "support": {
                 "issues": "https://github.com/revoltphp/event-loop/issues",
-                "source": "https://github.com/revoltphp/event-loop/tree/v0.1.0"
+                "source": "https://github.com/revoltphp/event-loop/tree/v0.1.1"
             },
-            "time": "2021-12-01T22:00:41+00:00"
+            "time": "2021-12-10T00:49:26+00:00"
         }
     ],
     "packages-dev": [],
@@ -165,5 +166,5 @@
         "php": "~8.1.0"
     },
     "platform-dev": [],
-    "plugin-api-version": "2.1.0"
+    "plugin-api-version": "2.2.0"
 }

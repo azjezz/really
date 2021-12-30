@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Really;
 
+use Exception;
 use Psl;
 use Psl\Async;
 use Psl\Env;
@@ -12,10 +13,8 @@ use Psl\Network;
 use Psl\Str;
 use Psl\TCP;
 use Psl\Unix;
-use Psl\Vec;
 use Throwable;
 
-use function count;
 use function parse_url;
 use function serialize;
 use function strlen;
@@ -59,7 +58,7 @@ final class Worker
             $address_components = parse_url($server_address);
             $address = Network\Address::tcp($address_components['host'], $address_components['port']);
         }
-        
+
         return new self($worker_id, $concurrency_level, $address);
     }
 
@@ -88,57 +87,50 @@ final class Worker
             }
         };
 
-        $pending = [];
+        $semaphore = new Async\Semaphore($this->concurrency_level, function (Network\SocketInterface $connection) use($handler): void {
+            try {
+                $packed_serialized_payload_length = $connection->read(self::MESSAGE_LENGTH);
+                Psl\invariant(4 === strlen($packed_serialized_payload_length), 'incorrect length.');
+                $serialized_payload_length = unpack('L', $packed_serialized_payload_length)[1];
+                $serialized_payload = $connection->readAll($serialized_payload_length);
+                $payload = unserialize($serialized_payload);
+            } catch (Throwable) {
+                // should be handled better.
+                $connection->close();
 
-        Async\Scheduler::unreference(Async\Scheduler::onSignal(SIGTERM, function () use(&$pending): void {
-            unset($pending);
+                return;
+            }
 
+            try {
+                $result = [
+                    'result' => serialize($handler($payload, $this)),
+                    'exception' => null,
+                ];
+            } catch (Throwable $throwable) {
+                echo $throwable->getMessage();
+                $result = [
+                    'exception' => serialize($throwable),
+                    'result' => null,
+                ];
+            }
+
+            $result_encoded = Json\encode($result);
+
+            $connection->writeAll($result_encoded);
+            $connection->close();
+        });
+
+        Async\Scheduler::unreference(Async\Scheduler::onSignal(SIGTERM, function () use($semaphore): void {
+            $semaphore->cancel(new Exception('killed.'));
             exit(0);
         }));
 
         while ($connection = $connect()) {
             Psl\invariant('ping' === $connection->read(self::MESSAGE_LENGTH), 'did not receive ping.');
 
-            $pending[] = Async\run(function () use ($connection, $handler): void {
-                try {
-                    $packed_serialized_payload_length = $connection->read(self::MESSAGE_LENGTH);
-                    Psl\invariant(4 === strlen($packed_serialized_payload_length), 'incorrect length.');
-                    $serialized_payload_length = unpack('L', $packed_serialized_payload_length)[1];
-                    $serialized_payload = $connection->readAll($serialized_payload_length);
-                    $payload = unserialize($serialized_payload);
-                } catch (Throwable) {
-                    // should be handled better.
-                    $connection->close();
-
-                    return;
-                }
-
-                try {
-                    $result = [
-                        'result' => serialize($handler($payload, $this)),
-                        'exception' => null,
-                    ];
-                } catch (Throwable $throwable) {
-                    echo $throwable->getMessage();
-                    $result = [
-                        'exception' => serialize($throwable),
-                        'result' => null,
-                    ];
-                }
-
-                $result_encoded = Json\encode($result);
-
-                $connection->writeAll($result_encoded);
-                $connection->close();
-            })->ignore();
-
-            while (count($pending) >= $this->concurrency_level) {
-                [$completed, $pending] = Vec\partition(
-                    $pending,
-                    static fn(Async\Awaitable $awaitable): bool => $awaitable->isComplete()
-                );
-
-                Async\all($completed);
+            Async\Scheduler::defer(static fn() => $semaphore->waitFor($connection));
+            while ($semaphore->isBusy()) {
+                Async\later();
             }
         }
 

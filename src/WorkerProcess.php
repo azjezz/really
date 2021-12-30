@@ -7,7 +7,7 @@ namespace Really;
 use Psl;
 use Psl\Dict;
 use Psl\Env;
-use Psl\IO\Stream;
+use Psl\IO;
 use Psl\Network;
 use Psl\Str;
 
@@ -27,8 +27,8 @@ final class WorkerProcess
          * @var resource|null $process
          */
         private mixed                           $process,
-        private Stream\CloseReadHandleInterface $stdout,
-        private Stream\CloseReadHandleInterface $stderr,
+        private IO\CloseReadHandleInterface $stdout,
+        private IO\CloseReadHandleInterface $stderr,
     )
     {
     }
@@ -62,8 +62,8 @@ final class WorkerProcess
         /** @var resource $process */
         $process = proc_open($commandline, $descriptor, $pipes, Env\current_dir(), $environment, $options);
 
-        $stdout = new Stream\CloseReadHandle($pipes[1]);
-        $stderr = new Stream\CloseReadHandle($pipes[2]);
+        $stdout = new IO\CloseReadStreamHandle($pipes[1]);
+        $stderr = new IO\CloseReadStreamHandle($pipes[2]);
 
         return new self($id, $process, $stdout, $stderr);
     }
@@ -73,14 +73,14 @@ final class WorkerProcess
         return $this->id;
     }
 
-    public function getStdout(): Stream\CloseReadHandleInterface
+    public function getStdout(): IO\CloseReadHandleInterface
     {
         Psl\invariant($this->process !== null, 'Worker has been killed.');
 
         return $this->stdout;
     }
 
-    public function getStderr(): Stream\CloseReadHandleInterface
+    public function getStderr(): IO\CloseReadHandleInterface
     {
         Psl\invariant($this->process !== null, 'Worker has been killed.');
 
